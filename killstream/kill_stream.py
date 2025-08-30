@@ -70,9 +70,9 @@ TAUTULLI_PUBLIC_URL = os.getenv('TAUTULLI_PUBLIC_URL', TAUTULLI_PUBLIC_URL)
 TAUTULLI_APIKEY = os.getenv('TAUTULLI_APIKEY', TAUTULLI_APIKEY)
 TAUTULLI_ENCODING = os.getenv('TAUTULLI_ENCODING', 'UTF-8')
 VERIFY_SSL = False
-RETRY_WINDOW = 3600 # 1 hour
-MAX_RETRIES = 1
-USERINFO_FILENAME = "userinfo.json"
+RETRY_WINDOW = 21600 # 6 hours
+MAX_RETRIES = 0
+RETRY_ENABLED = True
 
 if TAUTULLI_PUBLIC_URL != '/':
     # Check to see if there is a public URL set in Tautulli
@@ -335,8 +335,13 @@ class Stream(object):
         self.username = username
         self.session_exists = False
         self.tautulli = tautulli
-        self.user_retry_tracker = json.load(open("userinfo.json")) # { "user_id": {"retries": int, "last_attempt": float}}
-        
+
+        if username is not None:
+            self.user_state_file_path = self.username + ".json"
+            if not os.path.exists(self.user_state_file_path):
+                create_data = {}
+                json.dump(create_data, open(self.user_state_file_path,'w'))
+            self.user_retry_tracker = json.load(open(self.user_state_file_path)) # { "username": {"retries": int, "last_attempt": float}}
 
         if session is not None:
             self._set_stream_attributes(session)
@@ -348,7 +353,7 @@ class Stream(object):
         # Initialize and block the first attempt
         if self.username not in self.user_retry_tracker:    
             self.user_retry_tracker[self.username] = {"last_attempt": current_time, "retries": 0}
-            json.dump(self.user_retry_tracker, open("userinfo.json",'w'))
+            json.dump(self.user_retry_tracker, open(self.user_state_file_path,'w'))
             return False
 
         user_data = self.user_retry_tracker[self.username]
@@ -361,13 +366,13 @@ class Stream(object):
             if retries < MAX_RETRIES:
                 self.user_retry_tracker[self.username]["retries"] += 1
                 self.user_retry_tracker[self.username]["last_attempt"] = current_time
-                json.dump(self.user_retry_tracker, open("userinfo.json",'w'))
+                json.dump(self.user_retry_tracker, open(self.user_state_file_path,'w'))
                 return False
             else:
                 return True
         else:
-            self.user_retry_tracker[self.username] = {"last_attempt": current_time, "retries": 1}
-            json.dump(self.user_retry_tracker, open("userinfo.json",'w'))
+            self.user_retry_tracker[self.username] = {"last_attempt": current_time, "retries": 0}
+            json.dump(self.user_retry_tracker, open(self.user_state_file_path,'w'))
             return False  # Block since it's the first attempt after the retry window
 
     def _set_stream_attributes(self, session):
@@ -633,10 +638,6 @@ if __name__ == "__main__":
 
     opts = parser.parse_args()
 
-    if not os.path.exists(USERINFO_FILENAME):
-        create_data = {}
-        json.dump(create_data, open("userinfo.json",'w'))
-
     if not opts.sessionId and opts.jbop != 'allStreams':
         sys.stderr.write("No sessionId provided! Is this synced content?\n")
         sys.exit(1)
@@ -667,7 +668,7 @@ if __name__ == "__main__":
         time.sleep(opts.delay)
 
     if opts.jbop == 'stream':
-        allow_retry= tautulli_stream.should_allow_retry()
+        allow_retry = tautulli_stream.should_allow_retry()
         if not allow_retry:
             tautulli_stream.terminate(kill_message)
             notify(opts, kill_message, 'Stream', tautulli_stream, tautulli_server)
