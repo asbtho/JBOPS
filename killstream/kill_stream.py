@@ -70,6 +70,9 @@ TAUTULLI_PUBLIC_URL = os.getenv('TAUTULLI_PUBLIC_URL', TAUTULLI_PUBLIC_URL)
 TAUTULLI_APIKEY = os.getenv('TAUTULLI_APIKEY', TAUTULLI_APIKEY)
 TAUTULLI_ENCODING = os.getenv('TAUTULLI_ENCODING', 'UTF-8')
 VERIFY_SSL = False
+RETRY_WINDOW = 3600 # 1 hour
+MAX_RETRIES = 1
+USERINFO_FILENAME = "userinfo.json"
 
 if TAUTULLI_PUBLIC_URL != '/':
     # Check to see if there is a public URL set in Tautulli
@@ -332,9 +335,40 @@ class Stream(object):
         self.username = username
         self.session_exists = False
         self.tautulli = tautulli
+        self.user_retry_tracker = json.load(open("userinfo.json")) # { "user_id": {"retries": int, "last_attempt": float}}
+        
 
         if session is not None:
             self._set_stream_attributes(session)
+        
+    def should_allow_retry(self):
+        """Check if the user is within the retry window and track retries."""
+        current_time = time.time()
+
+        # Initialize and block the first attempt
+        if self.username not in self.user_retry_tracker:    
+            self.user_retry_tracker[self.username] = {"last_attempt": current_time, "retries": 0}
+            json.dump(self.user_retry_tracker, open("userinfo.json",'w'))
+            return False
+
+        user_data = self.user_retry_tracker[self.username]
+        last_attempt_time = user_data["last_attempt"]
+        retries = user_data["retries"]
+
+        # Check if we're within the retry window and within max allowed retries,
+        # or reset retries if outside the retry window.
+        if current_time - last_attempt_time <= RETRY_WINDOW:
+            if retries < MAX_RETRIES:
+                self.user_retry_tracker[self.username]["retries"] += 1
+                self.user_retry_tracker[self.username]["last_attempt"] = current_time
+                json.dump(self.user_retry_tracker, open("userinfo.json",'w'))
+                return False
+            else:
+                return True
+        else:
+            self.user_retry_tracker[self.username] = {"last_attempt": current_time, "retries": 1}
+            json.dump(self.user_retry_tracker, open("userinfo.json",'w'))
+            return False  # Block since it's the first attempt after the retry window
 
     def _set_stream_attributes(self, session):
         for k, v in session.items():
@@ -599,6 +633,10 @@ if __name__ == "__main__":
 
     opts = parser.parse_args()
 
+    if not os.path.exists(USERINFO_FILENAME):
+        create_data = {}
+        json.dump(create_data, open("userinfo.json",'w'))
+
     if not opts.sessionId and opts.jbop != 'allStreams':
         sys.stderr.write("No sessionId provided! Is this synced content?\n")
         sys.exit(1)
@@ -629,8 +667,10 @@ if __name__ == "__main__":
         time.sleep(opts.delay)
 
     if opts.jbop == 'stream':
-        tautulli_stream.terminate(kill_message)
-        notify(opts, kill_message, 'Stream', tautulli_stream, tautulli_server)
+        allow_retry= tautulli_stream.should_allow_retry()
+        if not allow_retry:
+            tautulli_stream.terminate(kill_message)
+            notify(opts, kill_message, 'Stream', tautulli_stream, tautulli_server)
 
     elif opts.jbop == 'allStreams':
         all_streams = get_all_streams(tautulli_server, opts.userId)
