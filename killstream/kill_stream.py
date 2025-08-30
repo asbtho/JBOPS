@@ -668,8 +668,12 @@ if __name__ == "__main__":
         time.sleep(opts.delay)
 
     if opts.jbop == 'stream':
-        allow_retry = tautulli_stream.should_allow_retry()
-        if not allow_retry:
+        if RETRY_ENABLED:
+            allow_retry = tautulli_stream.should_allow_retry()
+            if not allow_retry:
+                tautulli_stream.terminate(kill_message)
+                notify(opts, kill_message, 'Stream', tautulli_stream, tautulli_server)
+        else:
             tautulli_stream.terminate(kill_message)
             notify(opts, kill_message, 'Stream', tautulli_stream, tautulli_server)
 
